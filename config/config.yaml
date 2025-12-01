@@ -1,0 +1,13 @@
+server:
+  port: "8080"
+
+services:
+  user_service_address: "localhost:50051"
+  diary_service_address: "localhost:50052"
+
+log:
+  level: "info"
+  format: "json"
+  output: "stdout"
+
+environment: "development"

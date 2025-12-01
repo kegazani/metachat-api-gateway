@@ -1,0 +1,300 @@
+syntax = "proto3";
+
+package gateway;
+
+option go_package = "metachat/proto/gateway";
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/empty.proto";
+
+// Gateway service definition
+service GatewayService {
+  // User operations
+  rpc CreateUser(CreateUserRequest) returns (CreateUserResponse);
+  rpc GetUser(GetUserRequest) returns (GetUserResponse);
+  rpc UpdateUserProfile(UpdateUserProfileRequest) returns (UpdateUserProfileResponse);
+  rpc AssignArchetype(AssignArchetypeRequest) returns (AssignArchetypeResponse);
+  rpc UpdateArchetype(UpdateArchetypeRequest) returns (UpdateArchetypeResponse);
+  rpc UpdateModalities(UpdateModalitiesRequest) returns (UpdateModalitiesResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  
+  // Diary operations
+  rpc CreateDiaryEntry(CreateDiaryEntryRequest) returns (CreateDiaryEntryResponse);
+  rpc GetDiaryEntry(GetDiaryEntryRequest) returns (GetDiaryEntryResponse);
+  rpc UpdateDiaryEntry(UpdateDiaryEntryRequest) returns (UpdateDiaryEntryResponse);
+  rpc DeleteDiaryEntry(DeleteDiaryEntryRequest) returns (google.protobuf.Empty);
+  rpc StartDiarySession(StartDiarySessionRequest) returns (StartDiarySessionResponse);
+  rpc EndDiarySession(EndDiarySessionRequest) returns (EndDiarySessionResponse);
+  rpc GetDiarySession(GetDiarySessionRequest) returns (GetDiarySessionResponse);
+  rpc ListDiaryEntries(ListDiaryEntriesRequest) returns (ListDiaryEntriesResponse);
+  rpc ListDiarySessions(ListDiarySessionsRequest) returns (ListDiarySessionsResponse);
+  rpc GetDiaryEntriesByUser(GetDiaryEntriesByUserRequest) returns (GetDiaryEntriesByUserResponse);
+  rpc GetDiarySessionsByUser(GetDiarySessionsByUserRequest) returns (GetDiarySessionsByUserResponse);
+  rpc GetDiaryAnalytics(GetDiaryAnalyticsRequest) returns (GetDiaryAnalyticsResponse);
+}
+
+// Request/Response messages (reusing from user.proto and diary.proto)
+message CreateUserRequest {
+  string username = 1;
+  string email = 2;
+  string first_name = 3;
+  string last_name = 4;
+  string date_of_birth = 5;
+}
+
+message CreateUserResponse {
+  User user = 1;
+}
+
+message GetUserRequest {
+  string id = 1;
+}
+
+message GetUserResponse {
+  User user = 1;
+}
+
+message UpdateUserProfileRequest {
+  string id = 1;
+  string first_name = 2;
+  string last_name = 3;
+  string date_of_birth = 4;
+  string avatar = 5;
+  string bio = 6;
+}
+
+message UpdateUserProfileResponse {
+  User user = 1;
+}
+
+message AssignArchetypeRequest {
+  string id = 1;
+  string archetype_id = 2;
+  string archetype_name = 3;
+  double confidence = 4;
+  string description = 5;
+}
+
+message AssignArchetypeResponse {
+  User user = 1;
+}
+
+message UpdateArchetypeRequest {
+  string id = 1;
+  string archetype_id = 2;
+  string archetype_name = 3;
+  double confidence = 4;
+  string description = 5;
+}
+
+message UpdateArchetypeResponse {
+  User user = 1;
+}
+
+message UpdateModalitiesRequest {
+  string id = 1;
+  repeated UserModality modalities = 2;
+}
+
+message UpdateModalitiesResponse {
+  User user = 1;
+}
+
+message ListUsersRequest {
+  int32 page = 1;
+  int32 limit = 2;
+  string filter = 3;
+}
+
+message ListUsersResponse {
+  repeated User users = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 limit = 4;
+}
+
+message CreateDiaryEntryRequest {
+  string user_id = 1;
+  string title = 2;
+  string content = 3;
+  int32 token_count = 4;
+  string session_id = 5;
+  repeated string tags = 6;
+}
+
+message CreateDiaryEntryResponse {
+  DiaryEntry entry = 1;
+}
+
+message GetDiaryEntryRequest {
+  string id = 1;
+}
+
+message GetDiaryEntryResponse {
+  DiaryEntry entry = 1;
+}
+
+message UpdateDiaryEntryRequest {
+  string id = 1;
+  string title = 2;
+  string content = 3;
+  int32 token_count = 4;
+  repeated string tags = 5;
+}
+
+message UpdateDiaryEntryResponse {
+  DiaryEntry entry = 1;
+}
+
+message DeleteDiaryEntryRequest {
+  string id = 1;
+}
+
+message StartDiarySessionRequest {
+  string user_id = 1;
+  string title = 2;
+  string description = 3;
+}
+
+message StartDiarySessionResponse {
+  DiarySession session = 1;
+}
+
+message EndDiarySessionRequest {
+  string id = 1;
+}
+
+message EndDiarySessionResponse {
+  DiarySession session = 1;
+}
+
+message GetDiarySessionRequest {
+  string id = 1;
+}
+
+message GetDiarySessionResponse {
+  DiarySession session = 1;
+}
+
+message ListDiaryEntriesRequest {
+  int32 page = 1;
+  int32 limit = 2;
+  string filter = 3;
+}
+
+message ListDiaryEntriesResponse {
+  repeated DiaryEntry entries = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 limit = 4;
+}
+
+message ListDiarySessionsRequest {
+  int32 page = 1;
+  int32 limit = 2;
+  string filter = 3;
+}
+
+message ListDiarySessionsResponse {
+  repeated DiarySession sessions = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 limit = 4;
+}
+
+message GetDiaryEntriesByUserRequest {
+  string user_id = 1;
+  int32 page = 2;
+  int32 limit = 3;
+}
+
+message GetDiaryEntriesByUserResponse {
+  repeated DiaryEntry entries = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 limit = 4;
+}
+
+message GetDiarySessionsByUserRequest {
+  string user_id = 1;
+  int32 page = 2;
+  int32 limit = 3;
+}
+
+message GetDiarySessionsByUserResponse {
+  repeated DiarySession sessions = 1;
+  int32 total = 2;
+  int32 page = 3;
+  int32 limit = 4;
+}
+
+message GetDiaryAnalyticsRequest {
+  google.protobuf.Empty empty = 1;
+}
+
+message GetDiaryAnalyticsResponse {
+  DiaryAnalytics analytics = 1;
+}
+
+// Message types (simplified versions for gateway)
+message User {
+  string id = 1;
+  string username = 2;
+  string email = 3;
+  string first_name = 4;
+  string last_name = 5;
+  string date_of_birth = 6;
+  string avatar = 7;
+  string bio = 8;
+  Archetype archetype = 9;
+  repeated UserModality modalities = 10;
+  google.protobuf.Timestamp created_at = 11;
+  google.protobuf.Timestamp updated_at = 12;
+}
+
+message Archetype {
+  string id = 1;
+  string name = 2;
+  string description = 3;
+  double confidence = 4;
+  google.protobuf.Timestamp assigned_at = 5;
+}
+
+message UserModality {
+  string id = 1;
+  string name = 2;
+  double score = 3;
+  string description = 4;
+}
+
+message DiaryEntry {
+  string id = 1;
+  string user_id = 2;
+  string title = 3;
+  string content = 4;
+  int32 token_count = 5;
+  string session_id = 6;
+  repeated string tags = 7;
+  google.protobuf.Timestamp created_at = 8;
+  google.protobuf.Timestamp updated_at = 9;
+}
+
+message DiarySession {
+  string id = 1;
+  string user_id = 2;
+  string title = 3;
+  string description = 4;
+  google.protobuf.Timestamp started_at = 5;
+  google.protobuf.Timestamp ended_at = 6;
+  string status = 7;
+  int32 entry_count = 8;
+}
+
+message DiaryAnalytics {
+  int64 total_entries = 1;
+  int64 total_sessions = 2;
+  int64 active_users = 3;
+  double average_entries_per_session = 4;
+  double average_sessions_per_user = 5;
+  google.protobuf.Timestamp last_updated = 6;
+}
