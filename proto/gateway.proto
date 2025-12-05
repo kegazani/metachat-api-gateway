@@ -6,6 +6,7 @@ option go_package = "metachat/proto/gateway";
 
 import "google/protobuf/timestamp.proto";
 import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
 
 // Gateway service definition
 service GatewayService {
@@ -31,6 +32,21 @@ service GatewayService {
   rpc GetDiaryEntriesByUser(GetDiaryEntriesByUserRequest) returns (GetDiaryEntriesByUserResponse);
   rpc GetDiarySessionsByUser(GetDiarySessionsByUserRequest) returns (GetDiarySessionsByUserResponse);
   rpc GetDiaryAnalytics(GetDiaryAnalyticsRequest) returns (GetDiaryAnalyticsResponse);
+  
+  // Matching operations
+  rpc FindSimilarUsers(FindSimilarUsersRequest) returns (FindSimilarUsersResponse);
+  rpc CalculateUserSimilarity(CalculateUserSimilarityRequest) returns (CalculateUserSimilarityResponse);
+  rpc GetUserMatches(GetUserMatchesRequest) returns (GetUserMatchesResponse);
+  rpc GetUserPortrait(GetUserPortraitRequest) returns (GetUserPortraitResponse);
+  
+  // Recommendation operations
+  rpc GetContentRecommendations(GetContentRecommendationsRequest) returns (GetContentRecommendationsResponse);
+  rpc GetUserRecommendations(GetUserRecommendationsRequest) returns (GetUserRecommendationsResponse);
+  rpc GetSimilarContent(GetSimilarContentRequest) returns (GetSimilarContentResponse);
+  
+  // Mood analysis operations
+  rpc AnalyzeText(AnalyzeTextRequest) returns (AnalyzeTextResponse);
+  rpc GetUserMoodAggregation(GetUserMoodAggregationRequest) returns (GetUserMoodAggregationResponse);
 }
 
 // Request/Response messages (reusing from user.proto and diary.proto)
@@ -236,6 +252,69 @@ message GetDiaryAnalyticsResponse {
   DiaryAnalytics analytics = 1;
 }
 
+// Matching request/response messages
+message FindSimilarUsersRequest {
+  string user_id = 1;
+  int32 limit = 2;
+}
+
+message FindSimilarUsersResponse {
+  repeated UserMatch matches = 1;
+}
+
+message CalculateUserSimilarityRequest {
+  string user_id1 = 1;
+  string user_id2 = 2;
+}
+
+message CalculateUserSimilarityResponse {
+  double similarity = 1;
+}
+
+message GetUserMatchesRequest {
+  string user_id = 1;
+}
+
+message GetUserMatchesResponse {
+  repeated UserMatch matches = 1;
+}
+
+message GetUserPortraitRequest {
+  string user_id = 1;
+}
+
+message GetUserPortraitResponse {
+  UserPortrait portrait = 1;
+}
+
+// Recommendation request/response messages
+message GetContentRecommendationsRequest {
+  string user_id = 1;
+  int32 limit = 2;
+}
+
+message GetContentRecommendationsResponse {
+  repeated ContentRecommendation recommendations = 1;
+}
+
+message GetUserRecommendationsRequest {
+  string user_id = 1;
+  int32 limit = 2;
+}
+
+message GetUserRecommendationsResponse {
+  repeated UserMatch matches = 1;
+}
+
+message GetSimilarContentRequest {
+  string content_id = 1;
+  int32 limit = 2;
+}
+
+message GetSimilarContentResponse {
+  repeated Content content = 1;
+}
+
 // Message types (simplified versions for gateway)
 message User {
   string id = 1;
@@ -297,4 +376,83 @@ message DiaryAnalytics {
   double average_entries_per_session = 4;
   double average_sessions_per_user = 5;
   google.protobuf.Timestamp last_updated = 6;
+}
+
+// Additional message types for matching and recommendation services
+message UserMatch {
+  string user_id1 = 1;
+  string user_id2 = 2;
+  double similarity = 3;
+  repeated string common_tags = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message UserPortrait {
+  string user_id = 1;
+  map<string, double> mood_profile = 2;
+  map<string, double> personality_traits = 3;
+  repeated string interests = 4;
+  map<string, google.protobuf.Value> modalities = 5;
+  google.protobuf.Timestamp last_updated = 6;
+}
+
+message Content {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  string type = 4;
+  repeated string tags = 5;
+  map<string, google.protobuf.Value> metadata = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
+
+message ContentRecommendation {
+  Content content = 1;
+  double score = 2;
+  string reason = 3;
+}
+
+// Mood analysis request/response messages
+message AnalyzeTextRequest {
+  string text = 1;
+}
+
+message AnalyzeTextResponse {
+  repeated MoodScore mood_scores = 1;
+  string dominant_mood = 2;
+  float dominant_score = 3;
+}
+
+message MoodScore {
+  string mood = 1;
+  float score = 2;
+}
+
+message GetUserMoodAggregationRequest {
+  string user_id = 1;
+  string time_range = 2;  // "day", "week", or "month"
+}
+
+message GetUserMoodAggregationResponse {
+  string user_id = 1;
+  string time_range = 2;
+  string start_time = 3;
+  string end_time = 4;
+  int32 entry_count = 5;
+  repeated MoodAggregation mood_aggregations = 6;
+  repeated DominantMoodCount dominant_mood_counts = 7;
+  string overall_dominant_mood = 8;
+}
+
+message MoodAggregation {
+  string mood = 1;
+  float average = 2;
+  float max = 3;
+  float min = 4;
+  int32 count = 5;
+}
+
+message DominantMoodCount {
+  string mood = 1;
+  int32 count = 2;
 }

@@ -9,26 +9,28 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
+	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
 	"metachat/api-gateway/internal/handlers"
-	"github.com/metachat/config/logging"
-	diaryPb "github.com/metachat/proto/generated/diary"
-	userPb "github.com/metachat/proto/generated/user"
+
+	diaryPb "github.com/kegazani/metachat-proto/diary"
+	userPb "github.com/kegazani/metachat-proto/user"
+	matchingPb "github.com/kegazani/metachat-proto/matching"
+	matchRequestPb "github.com/kegazani/metachat-proto/match_request"
+	chatPb "github.com/kegazani/metachat-proto/chat"
 )
 
 func main() {
 	// Initialize logger
-	loggerConfig := logging.LoggerConfig{
-		ServiceName: "api-gateway",
-		Environment: viper.GetString("environment"),
-		LogLevel:    viper.GetString("log.level"),
-		LogFormat:   viper.GetString("log.format"),
-		LogOutput:   viper.GetString("log.output"),
-	}
-	logger := logging.NewLogger(loggerConfig)
+	logger := logrus.New()
+	logger.SetFormatter(&logrus.TextFormatter{
+		FullTimestamp: true,
+		ForceColors:   true,
+	})
+	logger.SetLevel(logrus.InfoLevel)
 
 	// Load configuration
 	viper.SetConfigName("config")
@@ -43,6 +45,9 @@ func main() {
 	// Initialize gRPC clients
 	userServiceAddr := viper.GetString("services.user_service_address")
 	diaryServiceAddr := viper.GetString("services.diary_service_address")
+	matchingServiceAddr := viper.GetString("services.matching_service_address")
+	matchRequestServiceAddr := viper.GetString("services.match_request_service_address")
+	chatServiceAddr := viper.GetString("services.chat_service_address")
 
 	userConn, err := grpc.Dial(userServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -56,12 +61,33 @@ func main() {
 	}
 	defer diaryConn.Close()
 
+	matchingConn, err := grpc.Dial(matchingServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Fatalf("Failed to connect to matching service: %v", err)
+	}
+	defer matchingConn.Close()
+
+	matchRequestConn, err := grpc.Dial(matchRequestServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Fatalf("Failed to connect to match request service: %v", err)
+	}
+	defer matchRequestConn.Close()
+
+	chatConn, err := grpc.Dial(chatServiceAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logger.Fatalf("Failed to connect to chat service: %v", err)
+	}
+	defer chatConn.Close()
+
 	// Create gRPC clients
 	userClient := userPb.NewUserServiceClient(userConn)
 	diaryClient := diaryPb.NewDiaryServiceClient(diaryConn)
+	matchingClient := matchingPb.NewMatchingServiceClient(matchingConn)
+	matchRequestClient := matchRequestPb.NewMatchRequestServiceClient(matchRequestConn)
+	chatClient := chatPb.NewChatServiceClient(chatConn)
 
 	// Initialize handlers
-	gatewayHandler := handlers.NewGatewayHandler(userClient, diaryClient, logger)
+	gatewayHandler := handlers.NewGatewayHandler(userClient, diaryClient, matchingClient, matchRequestClient, chatClient, logger)
 
 	// Setup HTTP router
 	router := mux.NewRouter()
@@ -73,9 +99,19 @@ func main() {
 		port = "8080" // Default API Gateway port
 	}
 
+	loggingRouter := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		logger.WithFields(logrus.Fields{
+			"method": r.Method,
+			"url":    r.URL.String(),
+			"path":   r.URL.Path,
+			"remote": r.RemoteAddr,
+		}).Info("HTTP request received")
+		router.ServeHTTP(w, r)
+	})
+
 	srv := &http.Server{
 		Addr:         ":" + port,
-		Handler:      router,
+		Handler:      loggingRouter,
 		ReadTimeout:  15 * time.Second,
 		WriteTimeout: 15 * time.Second,
 		IdleTimeout:  60 * time.Second,

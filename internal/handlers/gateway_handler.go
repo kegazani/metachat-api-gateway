@@ -2,41 +2,58 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
 
-	diaryPb "github.com/metachat/proto/generated/diary"
-	userPb "github.com/metachat/proto/generated/user"
+	diaryPb "github.com/kegazani/metachat-proto/diary"
+	userPb "github.com/kegazani/metachat-proto/user"
+	matchingPb "github.com/kegazani/metachat-proto/matching"
+	matchRequestPb "github.com/kegazani/metachat-proto/match_request"
+	chatPb "github.com/kegazani/metachat-proto/chat"
 )
 
 // GatewayHandler handles HTTP requests and forwards them to gRPC services
 type GatewayHandler struct {
-	userClient  userPb.UserServiceClient
-	diaryClient diaryPb.DiaryServiceClient
-	logger      *logrus.Logger
+	userClient        userPb.UserServiceClient
+	diaryClient       diaryPb.DiaryServiceClient
+	matchingClient    matchingPb.MatchingServiceClient
+	matchRequestClient matchRequestPb.MatchRequestServiceClient
+	chatClient        chatPb.ChatServiceClient
+	logger            *logrus.Logger
 }
 
 // NewGatewayHandler creates a new gateway handler
-func NewGatewayHandler(userClient userPb.UserServiceClient, diaryClient diaryPb.DiaryServiceClient, logger *logrus.Logger) *GatewayHandler {
+func NewGatewayHandler(userClient userPb.UserServiceClient, diaryClient diaryPb.DiaryServiceClient, matchingClient matchingPb.MatchingServiceClient, matchRequestClient matchRequestPb.MatchRequestServiceClient, chatClient chatPb.ChatServiceClient, logger *logrus.Logger) *GatewayHandler {
 	return &GatewayHandler{
-		userClient:  userClient,
-		diaryClient: diaryClient,
-		logger:      logger,
+		userClient:         userClient,
+		diaryClient:        diaryClient,
+		matchingClient:     matchingClient,
+		matchRequestClient: matchRequestClient,
+		chatClient:         chatClient,
+		logger:             logger,
 	}
 }
 
 // RegisterRoutes registers HTTP routes for the gateway
 func (h *GatewayHandler) RegisterRoutes(router *mux.Router) {
+	// Auth routes
+	router.HandleFunc("/auth/login", h.Login).Methods("POST")
+	router.HandleFunc("/auth/register", h.Register).Methods("POST")
+
 	// User routes
-	router.HandleFunc("/users", h.CreateUser).Methods("POST")
 	router.HandleFunc("/users/{id}", h.GetUser).Methods("GET")
 	router.HandleFunc("/users/{id}", h.UpdateUserProfile).Methods("PUT")
 	router.HandleFunc("/users/{id}/archetype", h.AssignArchetype).Methods("POST")
 	router.HandleFunc("/users/{id}/archetype", h.UpdateArchetype).Methods("PUT")
 	router.HandleFunc("/users/{id}/modalities", h.UpdateModalities).Methods("PUT")
 	router.HandleFunc("/users", h.ListUsers).Methods("GET")
+	router.HandleFunc("/users/{id}/profile-progress", h.GetUserProfileProgress).Methods("GET")
+	router.HandleFunc("/users/{id}/statistics", h.GetUserStatistics).Methods("GET")
 
 	// Diary routes
 	router.HandleFunc("/diary/entries", h.CreateDiaryEntry).Methods("POST")
@@ -52,31 +69,118 @@ func (h *GatewayHandler) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/diary/sessions/user/{userId}", h.GetDiarySessionsByUser).Methods("GET")
 	router.HandleFunc("/diary/analytics", h.GetDiaryAnalytics).Methods("GET")
 
-	// Add CORS middleware
+	// Matching routes
+	router.HandleFunc("/users/{id1}/common-topics/{id2}", h.GetCommonTopics).Methods("GET")
+
+	// Match Request routes
+	router.HandleFunc("/match-requests", h.CreateMatchRequest).Methods("POST")
+	router.HandleFunc("/match-requests/user/{user_id}", h.GetUserMatchRequests).Methods("GET")
+	router.HandleFunc("/match-requests/{request_id}/accept", h.AcceptMatchRequest).Methods("PUT")
+	router.HandleFunc("/match-requests/{request_id}/reject", h.RejectMatchRequest).Methods("PUT")
+	router.HandleFunc("/match-requests/{request_id}", h.GetMatchRequest).Methods("GET")
+	router.HandleFunc("/match-requests/{request_id}", h.CancelMatchRequest).Methods("DELETE")
+
+	// Chat routes
+	router.HandleFunc("/chats", h.CreateChat).Methods("POST")
+	router.HandleFunc("/chats/{chat_id}", h.GetChat).Methods("GET")
+	router.HandleFunc("/chats/user/{user_id}", h.GetUserChats).Methods("GET")
+	router.HandleFunc("/chats/{chat_id}/messages", h.SendMessage).Methods("POST")
+	router.HandleFunc("/chats/{chat_id}/messages", h.GetChatMessages).Methods("GET")
+	router.HandleFunc("/chats/{chat_id}/messages/read", h.MarkMessagesAsRead).Methods("PUT")
+
+	// Add middleware
+	router.Use(h.loggingMiddleware)
 	router.Use(h.corsMiddleware)
+
+	// Add catch-all handler for unmatched routes
+	router.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.logger.WithFields(logrus.Fields{
+			"method": r.Method,
+			"path":   r.URL.Path,
+			"remote": r.RemoteAddr,
+		}).Warn("Route not found")
+		http.Error(w, "Route not found", http.StatusNotFound)
+	})
 }
 
-// User handlers
-func (h *GatewayHandler) CreateUser(w http.ResponseWriter, r *http.Request) {
-	var req userPb.CreateUserRequest
+// Auth handlers
+func (h *GatewayHandler) Login(w http.ResponseWriter, r *http.Request) {
+	h.logger.WithFields(logrus.Fields{
+		"method": r.Method,
+		"path":   r.URL.Path,
+		"remote": r.RemoteAddr,
+	}).Info("Login request received")
+
+	var req userPb.LoginRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		h.logger.WithError(err).Error("Failed to decode request")
+		h.logger.WithError(err).Error("Failed to decode login request")
 		http.Error(w, "Invalid request body", http.StatusBadRequest)
 		return
 	}
 
-	resp, err := h.userClient.CreateUser(r.Context(), &req)
+	resp, err := h.userClient.Login(r.Context(), &req)
 	if err != nil {
-		h.logger.WithError(err).Error("Failed to create user")
-		http.Error(w, "Failed to create user", http.StatusInternalServerError)
+		h.logger.WithError(err).Error("Failed to login")
+		http.Error(w, "Failed to login", http.StatusUnauthorized)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp)
+	w.WriteHeader(http.StatusOK)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
+func (h *GatewayHandler) Register(w http.ResponseWriter, r *http.Request) {
+	h.logger.WithFields(logrus.Fields{
+		"method": r.Method,
+		"path":   r.URL.Path,
+		"remote": r.RemoteAddr,
+	}).Info("Register request received")
+
+	var req userPb.RegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.WithError(err).Error("Failed to decode register request")
+		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	if req.Username == "" || req.Email == "" || req.Password == "" {
+		h.logger.Error("Missing required fields in register request")
+		http.Error(w, "Missing required fields: username, email, and password are required", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := h.userClient.Register(r.Context(), &req)
+	if err != nil {
+		h.logger.WithFields(logrus.Fields{
+			"error":    err.Error(),
+			"email":    req.Email,
+			"username": req.Username,
+		}).Error("Failed to register user")
+
+		statusCode := http.StatusInternalServerError
+		errorMsg := "Failed to register user"
+
+		if err.Error() == "username already exists" ||
+			err.Error() == "email already exists" ||
+			err.Error() == "rpc error: code = AlreadyExists desc = username already exists" ||
+			err.Error() == "rpc error: code = AlreadyExists desc = email already exists" {
+			statusCode = http.StatusConflict
+			errorMsg = "User with this username or email already exists"
+		} else if err.Error() == "rpc error: code = Unavailable desc = connection error" ||
+			err.Error() == "rpc error: code = DeadlineExceeded desc = context deadline exceeded" {
+			statusCode = http.StatusServiceUnavailable
+			errorMsg = "User service is temporarily unavailable"
+		}
+
+		http.Error(w, errorMsg, statusCode)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+// User handlers
 func (h *GatewayHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
 	req := &userPb.GetUserRequest{
@@ -90,9 +194,8 @@ func (h *GatewayHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) UpdateUserProfile(w http.ResponseWriter, r *http.Request) {
@@ -113,9 +216,8 @@ func (h *GatewayHandler) UpdateUserProfile(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) AssignArchetype(w http.ResponseWriter, r *http.Request) {
@@ -136,9 +238,8 @@ func (h *GatewayHandler) AssignArchetype(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) UpdateArchetype(w http.ResponseWriter, r *http.Request) {
@@ -159,9 +260,8 @@ func (h *GatewayHandler) UpdateArchetype(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) UpdateModalities(w http.ResponseWriter, r *http.Request) {
@@ -182,9 +282,8 @@ func (h *GatewayHandler) UpdateModalities(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
@@ -206,12 +305,10 @@ func (h *GatewayHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
-// Diary handlers
 func (h *GatewayHandler) CreateDiaryEntry(w http.ResponseWriter, r *http.Request) {
 	var req diaryPb.CreateDiaryEntryRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -227,9 +324,8 @@ func (h *GatewayHandler) CreateDiaryEntry(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) GetDiaryEntry(w http.ResponseWriter, r *http.Request) {
@@ -245,9 +341,8 @@ func (h *GatewayHandler) GetDiaryEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) UpdateDiaryEntry(w http.ResponseWriter, r *http.Request) {
@@ -268,9 +363,8 @@ func (h *GatewayHandler) UpdateDiaryEntry(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) DeleteDiaryEntry(w http.ResponseWriter, r *http.Request) {
@@ -304,9 +398,8 @@ func (h *GatewayHandler) StartDiarySession(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) EndDiarySession(w http.ResponseWriter, r *http.Request) {
@@ -322,9 +415,8 @@ func (h *GatewayHandler) EndDiarySession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) GetDiarySession(w http.ResponseWriter, r *http.Request) {
@@ -340,13 +432,11 @@ func (h *GatewayHandler) GetDiarySession(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) ListDiaryEntries(w http.ResponseWriter, r *http.Request) {
-	// Parse query parameters
 	page := r.URL.Query().Get("page")
 	limit := r.URL.Query().Get("limit")
 	filter := r.URL.Query().Get("filter")
@@ -364,13 +454,11 @@ func (h *GatewayHandler) ListDiaryEntries(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) ListDiarySessions(w http.ResponseWriter, r *http.Request) {
-	// Parse query parameters
 	page := r.URL.Query().Get("page")
 	limit := r.URL.Query().Get("limit")
 	filter := r.URL.Query().Get("filter")
@@ -388,14 +476,12 @@ func (h *GatewayHandler) ListDiarySessions(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) GetDiaryEntriesByUser(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	// Parse query parameters
 	page := r.URL.Query().Get("page")
 	limit := r.URL.Query().Get("limit")
 
@@ -412,14 +498,12 @@ func (h *GatewayHandler) GetDiaryEntriesByUser(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) GetDiarySessionsByUser(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	// Parse query parameters
 	page := r.URL.Query().Get("page")
 	limit := r.URL.Query().Get("limit")
 
@@ -436,9 +520,8 @@ func (h *GatewayHandler) GetDiarySessionsByUser(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
 func (h *GatewayHandler) GetDiaryAnalytics(w http.ResponseWriter, r *http.Request) {
@@ -451,28 +534,329 @@ func (h *GatewayHandler) GetDiaryAnalytics(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(resp)
+	encodeProtoToJSON(w, resp, h.logger)
 }
 
-// Helper functions
+var protoJSONMarshaler = protojson.MarshalOptions{
+	EmitUnpopulated: true,
+	UseProtoNames:   true,
+}
+
+func encodeProtoToJSON(w http.ResponseWriter, msg proto.Message, logger *logrus.Logger) {
+	jsonBytes, err := protoJSONMarshaler.Marshal(msg)
+	if err != nil {
+		logger.WithError(err).Error("Failed to marshal protobuf message to JSON")
+		http.Error(w, "Failed to encode response", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	if _, err := w.Write(jsonBytes); err != nil {
+		logger.WithError(err).Error("Failed to write response")
+	}
+}
+
 func parsePage(pageStr string) int32 {
 	if pageStr == "" {
 		return 1
 	}
-	// Parse page string to int32
-	// Implementation depends on your requirements
-	return 1 // Default
+	return 1
 }
 
 func parseLimit(limitStr string) int32 {
 	if limitStr == "" {
-		return 10 // Default limit
+		return 10
 	}
-	// Parse limit string to int32
-	// Implementation depends on your requirements
-	return 10 // Default
+	return 10
+}
+
+func (h *GatewayHandler) GetUserProfileProgress(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	req := &userPb.GetUserProfileProgressRequest{Id: userID}
+	resp, err := h.userClient.GetUserProfileProgress(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get user profile progress")
+		http.Error(w, "Failed to get user profile progress", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) GetUserStatistics(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["id"]
+
+	req := &userPb.GetUserStatisticsRequest{Id: userID}
+	resp, err := h.userClient.GetUserStatistics(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get user statistics")
+		http.Error(w, "Failed to get user statistics", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) GetCommonTopics(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID1 := vars["id1"]
+	userID2 := vars["id2"]
+
+	req := &matchingPb.GetCommonTopicsRequest{UserId1: userID1, UserId2: userID2}
+	resp, err := h.matchingClient.GetCommonTopics(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get common topics")
+		http.Error(w, "Failed to get common topics", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) CreateMatchRequest(w http.ResponseWriter, r *http.Request) {
+	var req matchRequestPb.CreateMatchRequestRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.WithError(err).Error("Failed to decode create match request")
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := h.matchRequestClient.CreateMatchRequest(r.Context(), &req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to create match request")
+		http.Error(w, "Failed to create match request", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) GetUserMatchRequests(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["user_id"]
+	status := r.URL.Query().Get("status")
+
+	req := &matchRequestPb.GetUserMatchRequestsRequest{UserId: userID, Status: status}
+	resp, err := h.matchRequestClient.GetUserMatchRequests(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get user match requests")
+		http.Error(w, "Failed to get user match requests", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) AcceptMatchRequest(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	requestID := vars["request_id"]
+	userID := r.URL.Query().Get("user_id")
+
+	req := &matchRequestPb.AcceptMatchRequestRequest{RequestId: requestID, UserId: userID}
+	resp, err := h.matchRequestClient.AcceptMatchRequest(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to accept match request")
+		http.Error(w, "Failed to accept match request", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) RejectMatchRequest(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	requestID := vars["request_id"]
+	userID := r.URL.Query().Get("user_id")
+
+	req := &matchRequestPb.RejectMatchRequestRequest{RequestId: requestID, UserId: userID}
+	resp, err := h.matchRequestClient.RejectMatchRequest(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to reject match request")
+		http.Error(w, "Failed to reject match request", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) GetMatchRequest(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	requestID := vars["request_id"]
+
+	req := &matchRequestPb.GetMatchRequestRequest{RequestId: requestID}
+	resp, err := h.matchRequestClient.GetMatchRequest(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get match request")
+		http.Error(w, "Failed to get match request", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) CancelMatchRequest(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	requestID := vars["request_id"]
+	userID := r.URL.Query().Get("user_id")
+
+	req := &matchRequestPb.CancelMatchRequestRequest{RequestId: requestID, UserId: userID}
+	resp, err := h.matchRequestClient.CancelMatchRequest(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to cancel match request")
+		http.Error(w, "Failed to cancel match request", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) CreateChat(w http.ResponseWriter, r *http.Request) {
+	var req chatPb.CreateChatRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.WithError(err).Error("Failed to decode create chat request")
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	resp, err := h.chatClient.CreateChat(r.Context(), &req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to create chat")
+		http.Error(w, "Failed to create chat", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) GetChat(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	chatID := vars["chat_id"]
+
+	req := &chatPb.GetChatRequest{ChatId: chatID}
+	resp, err := h.chatClient.GetChat(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get chat")
+		http.Error(w, "Failed to get chat", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	userID := vars["user_id"]
+
+	req := &chatPb.GetUserChatsRequest{UserId: userID}
+	resp, err := h.chatClient.GetUserChats(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get user chats")
+		http.Error(w, "Failed to get user chats", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	chatID := vars["chat_id"]
+
+	var req chatPb.SendMessageRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		h.logger.WithError(err).Error("Failed to decode send message request")
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+	req.ChatId = chatID
+
+	resp, err := h.chatClient.SendMessage(r.Context(), &req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to send message")
+		http.Error(w, "Failed to send message", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) GetChatMessages(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	chatID := vars["chat_id"]
+	limitStr := r.URL.Query().Get("limit")
+	beforeMessageID := r.URL.Query().Get("before_message_id")
+
+	req := &chatPb.GetChatMessagesRequest{
+		ChatId:          chatID,
+		BeforeMessageId: beforeMessageID,
+	}
+	if limitStr != "" {
+		var limit int32
+		if _, err := fmt.Sscanf(limitStr, "%d", &limit); err == nil {
+			req.Limit = limit
+		}
+	}
+
+	resp, err := h.chatClient.GetChatMessages(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get chat messages")
+		http.Error(w, "Failed to get chat messages", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+func (h *GatewayHandler) MarkMessagesAsRead(w http.ResponseWriter, r *http.Request) {
+	vars := mux.Vars(r)
+	chatID := vars["chat_id"]
+	userID := r.URL.Query().Get("user_id")
+
+	req := &chatPb.MarkMessagesAsReadRequest{ChatId: chatID, UserId: userID}
+	resp, err := h.chatClient.MarkMessagesAsRead(r.Context(), req)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to mark messages as read")
+		http.Error(w, "Failed to mark messages as read", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	encodeProtoToJSON(w, resp, h.logger)
+}
+
+// loggingMiddleware logs all incoming requests
+func (h *GatewayHandler) loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.logger.WithFields(logrus.Fields{
+			"method":       r.Method,
+			"path":         r.URL.Path,
+			"remote":       r.RemoteAddr,
+			"host":         r.Host,
+			"user_agent":   r.UserAgent(),
+			"content_type": r.Header.Get("Content-Type"),
+		}).Info("Incoming request")
+		next.ServeHTTP(w, r)
+	})
 }
 
 // corsMiddleware adds CORS headers to all responses

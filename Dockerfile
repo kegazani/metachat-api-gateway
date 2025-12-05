@@ -1,15 +1,22 @@
-FROM golang:1.21-alpine AS builder
+FROM golang:1.24-alpine AS builder
+
+RUN apk add --no-cache git
 
 WORKDIR /app
 
-# Install dependencies
-COPY go.mod go.sum ./
-RUN go mod download
+RUN rm -rf /tmp/metachat-proto && \
+    git clone --depth 1 --branch v0.2.1 https://github.com/kegazani/metachat-proto.git /tmp/metachat-proto || \
+    git clone --depth 1 https://github.com/kegazani/metachat-proto.git /tmp/metachat-proto
 
-# Copy source code
-COPY . .
+COPY metachat-api-gateway/go.mod metachat-api-gateway/go.sum* ./
+RUN rm -f go.sum
+RUN go mod edit -require github.com/kegazani/metachat-proto@v0.2.1
+RUN go mod edit -replace github.com/kegazani/metachat-proto=/tmp/metachat-proto
 
-# Build the application
+COPY metachat-api-gateway/ .
+
+RUN go mod tidy
+
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o api-gateway ./cmd/main.go
 
 # Final stage
