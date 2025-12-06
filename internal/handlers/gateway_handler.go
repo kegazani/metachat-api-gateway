@@ -1,30 +1,40 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 
+	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"github.com/sirupsen/logrus"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
-	diaryPb "github.com/kegazani/metachat-proto/diary"
-	userPb "github.com/kegazani/metachat-proto/user"
-	matchingPb "github.com/kegazani/metachat-proto/matching"
-	matchRequestPb "github.com/kegazani/metachat-proto/match_request"
 	chatPb "github.com/kegazani/metachat-proto/chat"
+	diaryPb "github.com/kegazani/metachat-proto/diary"
+	matchRequestPb "github.com/kegazani/metachat-proto/match_request"
+	matchingPb "github.com/kegazani/metachat-proto/matching"
+	userPb "github.com/kegazani/metachat-proto/user"
 )
+
+const CorrelationIDHeader = "X-Correlation-ID"
+const CorrelationIDMetadataKey = "correlation_id"
+
+type correlationIDKey struct{}
+
+var CorrelationIDKey = correlationIDKey{}
 
 // GatewayHandler handles HTTP requests and forwards them to gRPC services
 type GatewayHandler struct {
-	userClient        userPb.UserServiceClient
-	diaryClient       diaryPb.DiaryServiceClient
-	matchingClient    matchingPb.MatchingServiceClient
+	userClient         userPb.UserServiceClient
+	diaryClient        diaryPb.DiaryServiceClient
+	matchingClient     matchingPb.MatchingServiceClient
 	matchRequestClient matchRequestPb.MatchRequestServiceClient
-	chatClient        chatPb.ChatServiceClient
-	logger            *logrus.Logger
+	chatClient         chatPb.ChatServiceClient
+	logger             *logrus.Logger
 }
 
 // NewGatewayHandler creates a new gateway handler
@@ -88,7 +98,7 @@ func (h *GatewayHandler) RegisterRoutes(router *mux.Router) {
 	router.HandleFunc("/chats/{chat_id}/messages", h.GetChatMessages).Methods("GET")
 	router.HandleFunc("/chats/{chat_id}/messages/read", h.MarkMessagesAsRead).Methods("PUT")
 
-	// Add middleware
+	router.Use(h.correlationIDMiddleware)
 	router.Use(h.loggingMiddleware)
 	router.Use(h.corsMiddleware)
 
@@ -118,7 +128,7 @@ func (h *GatewayHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.userClient.Login(r.Context(), &req)
+	resp, err := h.userClient.Login(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to login")
 		http.Error(w, "Failed to login", http.StatusUnauthorized)
@@ -149,7 +159,7 @@ func (h *GatewayHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.userClient.Register(r.Context(), &req)
+	resp, err := h.userClient.Register(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithFields(logrus.Fields{
 			"error":    err.Error(),
@@ -187,7 +197,7 @@ func (h *GatewayHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 		Id: vars["id"],
 	}
 
-	resp, err := h.userClient.GetUser(r.Context(), req)
+	resp, err := h.userClient.GetUser(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get user")
 		http.Error(w, "Failed to get user", http.StatusInternalServerError)
@@ -209,7 +219,7 @@ func (h *GatewayHandler) UpdateUserProfile(w http.ResponseWriter, r *http.Reques
 
 	req.Id = vars["id"]
 
-	resp, err := h.userClient.UpdateUserProfile(r.Context(), &req)
+	resp, err := h.userClient.UpdateUserProfile(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to update user profile")
 		http.Error(w, "Failed to update user profile", http.StatusInternalServerError)
@@ -231,7 +241,7 @@ func (h *GatewayHandler) AssignArchetype(w http.ResponseWriter, r *http.Request)
 
 	req.Id = vars["id"]
 
-	resp, err := h.userClient.AssignArchetype(r.Context(), &req)
+	resp, err := h.userClient.AssignArchetype(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to assign archetype")
 		http.Error(w, "Failed to assign archetype", http.StatusInternalServerError)
@@ -253,7 +263,7 @@ func (h *GatewayHandler) UpdateArchetype(w http.ResponseWriter, r *http.Request)
 
 	req.Id = vars["id"]
 
-	resp, err := h.userClient.UpdateArchetype(r.Context(), &req)
+	resp, err := h.userClient.UpdateArchetype(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to update archetype")
 		http.Error(w, "Failed to update archetype", http.StatusInternalServerError)
@@ -275,7 +285,7 @@ func (h *GatewayHandler) UpdateModalities(w http.ResponseWriter, r *http.Request
 
 	req.Id = vars["id"]
 
-	resp, err := h.userClient.UpdateModalities(r.Context(), &req)
+	resp, err := h.userClient.UpdateModalities(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to update modalities")
 		http.Error(w, "Failed to update modalities", http.StatusInternalServerError)
@@ -298,7 +308,7 @@ func (h *GatewayHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		Filter: filter,
 	}
 
-	resp, err := h.userClient.ListUsers(r.Context(), req)
+	resp, err := h.userClient.ListUsers(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to list users")
 		http.Error(w, "Failed to list users", http.StatusInternalServerError)
@@ -317,7 +327,7 @@ func (h *GatewayHandler) CreateDiaryEntry(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	resp, err := h.diaryClient.CreateDiaryEntry(r.Context(), &req)
+	resp, err := h.diaryClient.CreateDiaryEntry(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to create diary entry")
 		http.Error(w, "Failed to create diary entry", http.StatusInternalServerError)
@@ -334,7 +344,7 @@ func (h *GatewayHandler) GetDiaryEntry(w http.ResponseWriter, r *http.Request) {
 		Id: vars["id"],
 	}
 
-	resp, err := h.diaryClient.GetDiaryEntry(r.Context(), req)
+	resp, err := h.diaryClient.GetDiaryEntry(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get diary entry")
 		http.Error(w, "Failed to get diary entry", http.StatusInternalServerError)
@@ -356,7 +366,7 @@ func (h *GatewayHandler) UpdateDiaryEntry(w http.ResponseWriter, r *http.Request
 
 	req.Id = vars["id"]
 
-	resp, err := h.diaryClient.UpdateDiaryEntry(r.Context(), &req)
+	resp, err := h.diaryClient.UpdateDiaryEntry(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to update diary entry")
 		http.Error(w, "Failed to update diary entry", http.StatusInternalServerError)
@@ -373,7 +383,7 @@ func (h *GatewayHandler) DeleteDiaryEntry(w http.ResponseWriter, r *http.Request
 		Id: vars["id"],
 	}
 
-	_, err := h.diaryClient.DeleteDiaryEntry(r.Context(), req)
+	_, err := h.diaryClient.DeleteDiaryEntry(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to delete diary entry")
 		http.Error(w, "Failed to delete diary entry", http.StatusInternalServerError)
@@ -391,7 +401,7 @@ func (h *GatewayHandler) StartDiarySession(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	resp, err := h.diaryClient.StartDiarySession(r.Context(), &req)
+	resp, err := h.diaryClient.StartDiarySession(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to start diary session")
 		http.Error(w, "Failed to start diary session", http.StatusInternalServerError)
@@ -408,7 +418,7 @@ func (h *GatewayHandler) EndDiarySession(w http.ResponseWriter, r *http.Request)
 		Id: vars["id"],
 	}
 
-	resp, err := h.diaryClient.EndDiarySession(r.Context(), req)
+	resp, err := h.diaryClient.EndDiarySession(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to end diary session")
 		http.Error(w, "Failed to end diary session", http.StatusInternalServerError)
@@ -425,7 +435,7 @@ func (h *GatewayHandler) GetDiarySession(w http.ResponseWriter, r *http.Request)
 		Id: vars["id"],
 	}
 
-	resp, err := h.diaryClient.GetDiarySession(r.Context(), req)
+	resp, err := h.diaryClient.GetDiarySession(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get diary session")
 		http.Error(w, "Failed to get diary session", http.StatusInternalServerError)
@@ -447,7 +457,7 @@ func (h *GatewayHandler) ListDiaryEntries(w http.ResponseWriter, r *http.Request
 		Filter: filter,
 	}
 
-	resp, err := h.diaryClient.ListDiaryEntries(r.Context(), req)
+	resp, err := h.diaryClient.ListDiaryEntries(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to list diary entries")
 		http.Error(w, "Failed to list diary entries", http.StatusInternalServerError)
@@ -469,7 +479,7 @@ func (h *GatewayHandler) ListDiarySessions(w http.ResponseWriter, r *http.Reques
 		Filter: filter,
 	}
 
-	resp, err := h.diaryClient.ListDiarySessions(r.Context(), req)
+	resp, err := h.diaryClient.ListDiarySessions(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to list diary sessions")
 		http.Error(w, "Failed to list diary sessions", http.StatusInternalServerError)
@@ -491,7 +501,7 @@ func (h *GatewayHandler) GetDiaryEntriesByUser(w http.ResponseWriter, r *http.Re
 		Limit:  parseLimit(limit),
 	}
 
-	resp, err := h.diaryClient.GetDiaryEntriesByUser(r.Context(), req)
+	resp, err := h.diaryClient.GetDiaryEntriesByUser(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get diary entries by user")
 		http.Error(w, "Failed to get diary entries by user", http.StatusInternalServerError)
@@ -513,7 +523,7 @@ func (h *GatewayHandler) GetDiarySessionsByUser(w http.ResponseWriter, r *http.R
 		Limit:  parseLimit(limit),
 	}
 
-	resp, err := h.diaryClient.GetDiarySessionsByUser(r.Context(), req)
+	resp, err := h.diaryClient.GetDiarySessionsByUser(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get diary sessions by user")
 		http.Error(w, "Failed to get diary sessions by user", http.StatusInternalServerError)
@@ -527,7 +537,7 @@ func (h *GatewayHandler) GetDiarySessionsByUser(w http.ResponseWriter, r *http.R
 func (h *GatewayHandler) GetDiaryAnalytics(w http.ResponseWriter, r *http.Request) {
 	req := &diaryPb.GetDiaryAnalyticsRequest{}
 
-	resp, err := h.diaryClient.GetDiaryAnalytics(r.Context(), req)
+	resp, err := h.diaryClient.GetDiaryAnalytics(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get diary analytics")
 		http.Error(w, "Failed to get diary analytics", http.StatusInternalServerError)
@@ -576,7 +586,7 @@ func (h *GatewayHandler) GetUserProfileProgress(w http.ResponseWriter, r *http.R
 	userID := vars["id"]
 
 	req := &userPb.GetUserProfileProgressRequest{Id: userID}
-	resp, err := h.userClient.GetUserProfileProgress(r.Context(), req)
+	resp, err := h.userClient.GetUserProfileProgress(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get user profile progress")
 		http.Error(w, "Failed to get user profile progress", http.StatusInternalServerError)
@@ -592,7 +602,7 @@ func (h *GatewayHandler) GetUserStatistics(w http.ResponseWriter, r *http.Reques
 	userID := vars["id"]
 
 	req := &userPb.GetUserStatisticsRequest{Id: userID}
-	resp, err := h.userClient.GetUserStatistics(r.Context(), req)
+	resp, err := h.userClient.GetUserStatistics(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get user statistics")
 		http.Error(w, "Failed to get user statistics", http.StatusInternalServerError)
@@ -609,7 +619,7 @@ func (h *GatewayHandler) GetCommonTopics(w http.ResponseWriter, r *http.Request)
 	userID2 := vars["id2"]
 
 	req := &matchingPb.GetCommonTopicsRequest{UserId1: userID1, UserId2: userID2}
-	resp, err := h.matchingClient.GetCommonTopics(r.Context(), req)
+	resp, err := h.matchingClient.GetCommonTopics(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get common topics")
 		http.Error(w, "Failed to get common topics", http.StatusInternalServerError)
@@ -628,7 +638,7 @@ func (h *GatewayHandler) CreateMatchRequest(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	resp, err := h.matchRequestClient.CreateMatchRequest(r.Context(), &req)
+	resp, err := h.matchRequestClient.CreateMatchRequest(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to create match request")
 		http.Error(w, "Failed to create match request", http.StatusInternalServerError)
@@ -646,7 +656,7 @@ func (h *GatewayHandler) GetUserMatchRequests(w http.ResponseWriter, r *http.Req
 	status := r.URL.Query().Get("status")
 
 	req := &matchRequestPb.GetUserMatchRequestsRequest{UserId: userID, Status: status}
-	resp, err := h.matchRequestClient.GetUserMatchRequests(r.Context(), req)
+	resp, err := h.matchRequestClient.GetUserMatchRequests(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get user match requests")
 		http.Error(w, "Failed to get user match requests", http.StatusInternalServerError)
@@ -663,7 +673,7 @@ func (h *GatewayHandler) AcceptMatchRequest(w http.ResponseWriter, r *http.Reque
 	userID := r.URL.Query().Get("user_id")
 
 	req := &matchRequestPb.AcceptMatchRequestRequest{RequestId: requestID, UserId: userID}
-	resp, err := h.matchRequestClient.AcceptMatchRequest(r.Context(), req)
+	resp, err := h.matchRequestClient.AcceptMatchRequest(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to accept match request")
 		http.Error(w, "Failed to accept match request", http.StatusInternalServerError)
@@ -680,7 +690,7 @@ func (h *GatewayHandler) RejectMatchRequest(w http.ResponseWriter, r *http.Reque
 	userID := r.URL.Query().Get("user_id")
 
 	req := &matchRequestPb.RejectMatchRequestRequest{RequestId: requestID, UserId: userID}
-	resp, err := h.matchRequestClient.RejectMatchRequest(r.Context(), req)
+	resp, err := h.matchRequestClient.RejectMatchRequest(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to reject match request")
 		http.Error(w, "Failed to reject match request", http.StatusInternalServerError)
@@ -696,7 +706,7 @@ func (h *GatewayHandler) GetMatchRequest(w http.ResponseWriter, r *http.Request)
 	requestID := vars["request_id"]
 
 	req := &matchRequestPb.GetMatchRequestRequest{RequestId: requestID}
-	resp, err := h.matchRequestClient.GetMatchRequest(r.Context(), req)
+	resp, err := h.matchRequestClient.GetMatchRequest(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get match request")
 		http.Error(w, "Failed to get match request", http.StatusInternalServerError)
@@ -713,7 +723,7 @@ func (h *GatewayHandler) CancelMatchRequest(w http.ResponseWriter, r *http.Reque
 	userID := r.URL.Query().Get("user_id")
 
 	req := &matchRequestPb.CancelMatchRequestRequest{RequestId: requestID, UserId: userID}
-	resp, err := h.matchRequestClient.CancelMatchRequest(r.Context(), req)
+	resp, err := h.matchRequestClient.CancelMatchRequest(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to cancel match request")
 		http.Error(w, "Failed to cancel match request", http.StatusInternalServerError)
@@ -732,7 +742,7 @@ func (h *GatewayHandler) CreateChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, err := h.chatClient.CreateChat(r.Context(), &req)
+	resp, err := h.chatClient.CreateChat(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to create chat")
 		http.Error(w, "Failed to create chat", http.StatusInternalServerError)
@@ -749,7 +759,7 @@ func (h *GatewayHandler) GetChat(w http.ResponseWriter, r *http.Request) {
 	chatID := vars["chat_id"]
 
 	req := &chatPb.GetChatRequest{ChatId: chatID}
-	resp, err := h.chatClient.GetChat(r.Context(), req)
+	resp, err := h.chatClient.GetChat(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get chat")
 		http.Error(w, "Failed to get chat", http.StatusInternalServerError)
@@ -765,7 +775,7 @@ func (h *GatewayHandler) GetUserChats(w http.ResponseWriter, r *http.Request) {
 	userID := vars["user_id"]
 
 	req := &chatPb.GetUserChatsRequest{UserId: userID}
-	resp, err := h.chatClient.GetUserChats(r.Context(), req)
+	resp, err := h.chatClient.GetUserChats(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get user chats")
 		http.Error(w, "Failed to get user chats", http.StatusInternalServerError)
@@ -788,7 +798,7 @@ func (h *GatewayHandler) SendMessage(w http.ResponseWriter, r *http.Request) {
 	}
 	req.ChatId = chatID
 
-	resp, err := h.chatClient.SendMessage(r.Context(), &req)
+	resp, err := h.chatClient.SendMessage(h.contextWithCorrelationID(r.Context()), &req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to send message")
 		http.Error(w, "Failed to send message", http.StatusInternalServerError)
@@ -816,7 +826,7 @@ func (h *GatewayHandler) GetChatMessages(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	resp, err := h.chatClient.GetChatMessages(r.Context(), req)
+	resp, err := h.chatClient.GetChatMessages(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to get chat messages")
 		http.Error(w, "Failed to get chat messages", http.StatusInternalServerError)
@@ -833,7 +843,7 @@ func (h *GatewayHandler) MarkMessagesAsRead(w http.ResponseWriter, r *http.Reque
 	userID := r.URL.Query().Get("user_id")
 
 	req := &chatPb.MarkMessagesAsReadRequest{ChatId: chatID, UserId: userID}
-	resp, err := h.chatClient.MarkMessagesAsRead(r.Context(), req)
+	resp, err := h.chatClient.MarkMessagesAsRead(h.contextWithCorrelationID(r.Context()), req)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to mark messages as read")
 		http.Error(w, "Failed to mark messages as read", http.StatusInternalServerError)
@@ -844,19 +854,45 @@ func (h *GatewayHandler) MarkMessagesAsRead(w http.ResponseWriter, r *http.Reque
 	encodeProtoToJSON(w, resp, h.logger)
 }
 
-// loggingMiddleware logs all incoming requests
+func (h *GatewayHandler) correlationIDMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		correlationID := r.Header.Get(CorrelationIDHeader)
+		if correlationID == "" {
+			correlationID = uuid.New().String()
+		}
+
+		w.Header().Set(CorrelationIDHeader, correlationID)
+		ctx := context.WithValue(r.Context(), CorrelationIDKey, correlationID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func (h *GatewayHandler) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		correlationID := r.Context().Value(CorrelationIDKey)
+		if correlationID == nil {
+			correlationID = "unknown"
+		}
+
 		h.logger.WithFields(logrus.Fields{
-			"method":       r.Method,
-			"path":         r.URL.Path,
-			"remote":       r.RemoteAddr,
-			"host":         r.Host,
-			"user_agent":   r.UserAgent(),
-			"content_type": r.Header.Get("Content-Type"),
+			"correlation_id": correlationID,
+			"method":         r.Method,
+			"path":           r.URL.Path,
+			"remote":         r.RemoteAddr,
+			"host":           r.Host,
+			"user_agent":     r.UserAgent(),
+			"content_type":   r.Header.Get("Content-Type"),
 		}).Info("Incoming request")
 		next.ServeHTTP(w, r)
 	})
+}
+
+func (h *GatewayHandler) contextWithCorrelationID(ctx context.Context) context.Context {
+	correlationID, ok := ctx.Value(CorrelationIDKey).(string)
+	if !ok || correlationID == "" {
+		correlationID = uuid.New().String()
+	}
+	return metadata.AppendToOutgoingContext(ctx, CorrelationIDMetadataKey, correlationID)
 }
 
 // corsMiddleware adds CORS headers to all responses

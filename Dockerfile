@@ -4,14 +4,8 @@ RUN apk add --no-cache git
 
 WORKDIR /app
 
-RUN rm -rf /tmp/metachat-proto && \
-    git clone --depth 1 --branch v0.2.1 https://github.com/kegazani/metachat-proto.git /tmp/metachat-proto || \
-    git clone --depth 1 https://github.com/kegazani/metachat-proto.git /tmp/metachat-proto
-
 COPY metachat-api-gateway/go.mod metachat-api-gateway/go.sum* ./
-RUN rm -f go.sum
-RUN go mod edit -require github.com/kegazani/metachat-proto@v0.2.1
-RUN go mod edit -replace github.com/kegazani/metachat-proto=/tmp/metachat-proto
+RUN go mod download
 
 COPY metachat-api-gateway/ .
 
